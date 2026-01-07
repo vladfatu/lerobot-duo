@@ -1,4 +1,4 @@
-from lerobot.find_port import find_port, find_available_ports
+from lerobot.scripts.lerobot_find_port import find_port, find_available_ports
 
 
 # finding the port
