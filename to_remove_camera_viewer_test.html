@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>WebXR Camera Viewer</title>
+    <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v6.1.1/dist/aframe-extras.misc.min.js"></script>
+    <script src="https://unpkg.com/super-hands@^3.0.3/dist/super-hands.min.js"></script>
+    
+    <script>
+      // WebRTC connection manager
+      const WebRTCManager = {
+        serverUrl: window.location.origin,
+        connections: {},
+        
+        async getCameras() {
+          try {
+            const response = await fetch(`${this.serverUrl}/cameras`);
+            return await response.json();
+          } catch (error) {
+            console.error('Failed to fetch cameras:', error);
+            return [];
+          }
+        },
+        
+        async connectToCamera(cameraName, videoElement) {
+          try {
+            const pc = new RTCPeerConnection({
+              iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+            
+            pc.ontrack = (event) => {
+              console.log(`Received track for camera: ${cameraName}`);
+              videoElement.srcObject = event.streams[0];
+              videoElement.play().catch(e => console.log('Autoplay prevented:', e));
+            };
+            
+            pc.oniceconnectionstatechange = () => {
+              console.log(`ICE state for ${cameraName}: ${pc.iceConnectionState}`);
+            };
+            
+            // Create offer
+            pc.addTransceiver('video', { direction: 'recvonly' });
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            
+            // Send offer to server
+            const response = await fetch(`${this.serverUrl}/offer`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sdp: offer.sdp,
+                type: offer.type,
+                camera: cameraName
+              })
+            });
+            
+            const answer = await response.json();
+            await pc.setRemoteDescription(new RTCSessionDescription(answer));
+            
+            this.connections[cameraName] = pc;
+            console.log(`Connected to camera: ${cameraName}`);
+            return true;
+          } catch (error) {
+            console.error(`Failed to connect to camera ${cameraName}:`, error);
+            return false;
+          }
+        }
+      };
+
+      // Component to show laser when hovering or grabbing draggable objects
+      AFRAME.registerComponent('laser-visibility', {
+        init: function () {
+          this.el.addEventListener('raycaster-intersection', (e) => {
+            const intersectedEl = e.detail.els[0];
+            if (intersectedEl && intersectedEl.classList.contains('draggable')) {
+              this.showLaser();
+            }
+          });
+
+          this.el.addEventListener('raycaster-intersection-cleared', (e) => {
+            const isGrabbing = this.el.components['super-hands'] && this.el.components['super-hands'].state.includes('grab');
+            if (!isGrabbing) {
+              this.hideLaser();
+            }
+          });
+
+          this.el.addEventListener('grip-down', () => {
+            this.showLaser();
+          });
+
+          this.el.addEventListener('trigger-down', () => {
+            this.showLaser();
+          });
+
+          this.el.addEventListener('grip-up', () => {
+            this.hideLaser();
+          });
+
+          this.el.addEventListener('trigger-up', () => {
+            this.hideLaser();
+          });
+        },
+
+        showLaser: function() {
+          this.el.setAttribute('line', 'visible', true);
+          this.el.setAttribute('line', 'opacity', 0.8);
+        },
+
+        hideLaser: function() {
+          this.el.setAttribute('line', 'visible', false);
+          this.el.setAttribute('line', 'opacity', 0);
+        }
+      });
+
+      // Component to make panels always face the headset/camera
+      AFRAME.registerComponent('look-at-headset', {
+        schema: {
+          enabled: { type: 'boolean', default: true },
+          smoothing: { type: 'number', default: 0.1 } // Lower = smoother, higher = more responsive
+        },
+        
+        init: function() {
+          this.camera = null;
+          this.targetRotation = new THREE.Euler();
+          this.isGrabbed = false;
+          
+          // Listen for grab events to pause look-at while dragging
+          this.el.addEventListener('grab-start', () => {
+            this.isGrabbed = true;
+          });
+          
+          this.el.addEventListener('grab-end', () => {
+            this.isGrabbed = false;
+          });
+        },
+        
+        tick: function() {
+          if (!this.data.enabled || this.isGrabbed) return;
+          
+          // Get camera reference
+          if (!this.camera) {
+            this.camera = this.el.sceneEl.camera;
+            if (!this.camera) return;
+          }
+          
+          // Get camera (headset) world position
+          const cameraPosition = new THREE.Vector3();
+          this.camera.getWorldPosition(cameraPosition);
+          
+          // Get panel world position
+          const panelPosition = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(panelPosition);
+          
+          // Calculate direction from panel to camera (only on horizontal plane)
+          const direction = new THREE.Vector3();
+          direction.subVectors(cameraPosition, panelPosition);
+          direction.y = 0; // Keep panel upright, only rotate on Y axis
+          direction.normalize();
+          
+          // Calculate target Y rotation
+          const targetY = Math.atan2(direction.x, direction.z);
+          
+          // Smoothly interpolate current rotation towards target
+          const currentRotation = this.el.object3D.rotation;
+          const smoothing = this.data.smoothing;
+          
+          // Interpolate Y rotation (handle wraparound)
+          let deltaY = targetY - currentRotation.y;
+          while (deltaY > Math.PI) deltaY -= Math.PI * 2;
+          while (deltaY < -Math.PI) deltaY += Math.PI * 2;
+          
+          currentRotation.y += deltaY * smoothing;
+        }
+      });
+
+      // Component to stream WebRTC video to a panel
+      AFRAME.registerComponent('webrtc-video', {
+        schema: {
+          camera: { type: 'string', default: '' },
+          panelIndex: { type: 'int', default: 0 },
+          maxWidth: { type: 'number', default: 1.6 },  // Maximum panel width in meters
+          maxHeight: { type: 'number', default: 1.2 }  // Maximum panel height in meters
+        },
+        
+        init: function () {
+          this.videoEl = null;
+          this.textureCreated = false;
+          this.setupVideo();
+        },
+        
+        setupVideo: async function() {
+          const cameraName = this.data.camera;
+          if (!cameraName) {
+            console.log(`No camera specified for panel ${this.data.panelIndex}`);
+            return;
+          }
+          
+          // Create hidden video element
+          this.videoEl = document.createElement('video');
+          this.videoEl.id = `video-${this.data.panelIndex}`;
+          this.videoEl.setAttribute('playsinline', '');
+          this.videoEl.setAttribute('autoplay', '');
+          this.videoEl.muted = true;
+          this.videoEl.style.display = 'none';
+          document.body.appendChild(this.videoEl);
+          
+          console.log(`Panel ${this.data.panelIndex} connecting to camera: ${cameraName}`);
+          
+          // Update label
+          const textEl = this.el.querySelector('a-text');
+          if (textEl) {
+            textEl.setAttribute('value', cameraName);
+          }
+          
+          // Connect to WebRTC stream
+          const connected = await WebRTCManager.connectToCamera(cameraName, this.videoEl);
+          
+          if (connected) {
+            // Wait for video to have data then create texture
+            this.videoEl.addEventListener('loadeddata', () => {
+              this.createVideoTexture();
+            });
+            
+            // Also try after a short delay as backup
+            setTimeout(() => {
+              if (!this.textureCreated) {
+                this.createVideoTexture();
+              }
+            }, 2000);
+          }
+        },
+        
+        resizePanelToVideo: function(videoWidth, videoHeight) {
+          const aspectRatio = videoWidth / videoHeight;
+          const maxWidth = this.data.maxWidth;
+          const maxHeight = this.data.maxHeight;
+          
+          let panelWidth, panelHeight;
+          
+          // Calculate dimensions that fit within max bounds while preserving aspect ratio
+          if (aspectRatio > maxWidth / maxHeight) {
+            // Video is wider than max aspect ratio - constrain by width
+            panelWidth = maxWidth;
+            panelHeight = maxWidth / aspectRatio;
+          } else {
+            // Video is taller - constrain by height
+            panelHeight = maxHeight;
+            panelWidth = maxHeight * aspectRatio;
+          }
+          
+          // Update the box (panel background) size
+          this.el.setAttribute('width', panelWidth);
+          this.el.setAttribute('height', panelHeight);
+          this.el.setAttribute('depth', 0.05);
+          
+          console.log(`Panel ${this.data.panelIndex} resized to ${panelWidth.toFixed(2)}x${panelHeight.toFixed(2)} (video: ${videoWidth}x${videoHeight}, aspect: ${aspectRatio.toFixed(2)})`);
+          
+          return { width: panelWidth, height: panelHeight };
+        },
+        
+        createVideoTexture: function() {
+          if (this.textureCreated || !this.videoEl.srcObject) return;
+          
+          // Get video dimensions
+          const videoWidth = this.videoEl.videoWidth || 640;
+          const videoHeight = this.videoEl.videoHeight || 480;
+          
+          // Resize panel based on video aspect ratio
+          const { width: panelWidth, height: panelHeight } = this.resizePanelToVideo(videoWidth, videoHeight);
+          
+          // Create A-Frame asset for the video
+          const assets = document.querySelector('a-assets') || this.createAssets();
+          
+          // Register video as asset
+          const assetVideo = document.createElement('video');
+          assetVideo.id = `asset-video-${this.data.panelIndex}`;
+          assetVideo.srcObject = this.videoEl.srcObject;
+          assetVideo.setAttribute('playsinline', '');
+          assetVideo.setAttribute('autoplay', '');
+          assetVideo.muted = true;
+          assets.appendChild(assetVideo);
+          assetVideo.play().catch(e => console.log('Asset video play error:', e));
+          
+          // Apply video texture to the panel (front face) - sized to match panel with small margin
+          const planeEl = document.createElement('a-plane');
+          planeEl.setAttribute('position', '0 0 0.026');
+          planeEl.setAttribute('width', panelWidth - 0.02);
+          planeEl.setAttribute('height', panelHeight - 0.02);
+          planeEl.setAttribute('material', `shader: flat; src: #asset-video-${this.data.panelIndex}; side: front`);
+          this.el.appendChild(planeEl);
+          
+          // Update text position to be at the bottom of the panel
+          const textEl = this.el.querySelector('a-text');
+          if (textEl) {
+            textEl.setAttribute('position', `0 ${-panelHeight/2 - 0.08} 0.03`);
+            textEl.setAttribute('width', '1.5');
+          }
+          
+          this.textureCreated = true;
+          console.log(`Video texture created for panel ${this.data.panelIndex}`);
+        },
+        
+        createAssets: function() {
+          const assets = document.createElement('a-assets');
+          this.el.sceneEl.insertBefore(assets, this.el.sceneEl.firstChild);
+          return assets;
+        },
+        
+        remove: function() {
+          if (this.videoEl && this.videoEl.parentNode) {
+            this.videoEl.parentNode.removeChild(this.videoEl);
+          }
+        }
+      });
+
+      // Panel manager to dynamically create panels based on available cameras
+      AFRAME.registerComponent('panel-manager', {
+        init: async function() {
+          // Wait for scene to be fully loaded
+          if (this.el.sceneEl.hasLoaded) {
+            await this.createPanels();
+          } else {
+            this.el.sceneEl.addEventListener('loaded', () => this.createPanels());
+          }
+        },
+        
+        createPanels: async function() {
+          const cameras = await WebRTCManager.getCameras();
+          console.log('Available cameras:', cameras);
+          
+          if (cameras.length === 0) {
+            console.log('No cameras available');
+            // Create a placeholder panel
+            this.createPanel('No cameras available', 0, 1);
+            return;
+          }
+          
+          const numCameras = cameras.length;
+          
+          cameras.forEach((cameraName, index) => {
+            this.createPanel(cameraName, index, numCameras);
+          });
+        },
+        
+        createPanel: function(cameraName, index, totalPanels) {
+          // Calculate position in an arc
+          const panelSpacing = 1.8; // Spacing between panels
+          const radius = 2; // Distance from user
+          const height = 1.5; // Height of panels
+          
+          // Calculate angle for arc arrangement
+          const totalAngle = Math.min(totalPanels * 35, 140); // Max 140 degrees spread
+          const startAngle = totalAngle / 2;
+          const angleStep = totalPanels > 1 ? totalAngle / (totalPanels - 1) : 0;
+          const angle = totalPanels > 1 ? startAngle - (index * angleStep) : 0;
+          const angleRad = (angle * Math.PI) / 180;
+          
+          // Calculate x and z position on arc
+          const x = Math.sin(angleRad) * radius;
+          const z = -Math.cos(angleRad) * radius;
+          
+          // Create panel entity with placeholder size (will be resized when video loads)
+          const panel = document.createElement('a-box');
+          panel.setAttribute('class', 'draggable');
+          panel.setAttribute('position', `${x} ${height} ${z}`);
+          panel.setAttribute('rotation', `0 ${angle} 0`);
+          panel.setAttribute('width', '0.8');  // Placeholder - resized by webrtc-video when stream loads
+          panel.setAttribute('height', '0.6'); // Placeholder - resized by webrtc-video when stream loads
+          panel.setAttribute('depth', '0.05');
+          panel.setAttribute('color', '#333');
+          panel.setAttribute('grabbable', 'startButtons: gripdown, triggerdown; endButtons: gripup, triggerup');
+          panel.setAttribute('draggable', '');
+          panel.setAttribute('shadow', '');
+          panel.setAttribute('webrtc-video', `camera: ${cameraName}; panelIndex: ${index}; maxWidth: 1.6; maxHeight: 1.2`);
+          panel.setAttribute('look-at-headset', 'smoothing: 0.08');
+          
+          // Add text label
+          const text = document.createElement('a-text');
+          text.setAttribute('value', 'Connecting...');
+          text.setAttribute('align', 'center');
+          text.setAttribute('position', '0 0 0.03');
+          text.setAttribute('width', '2');
+          text.setAttribute('color', '#ffffff');
+          panel.appendChild(text);
+          
+          this.el.appendChild(panel);
+          console.log(`Created panel ${index} for camera: ${cameraName} at angle ${angle}°`);
+        }
+      });
+    </script>
+  </head>
+  <body>
+    <a-scene>
+      <a-assets></a-assets>
+      
+      <a-sky color="#222"></a-sky>
+
+      <!-- Container for dynamically created panels -->
+      <a-entity id="panel-container" panel-manager></a-entity>
+
+      <!-- Left hand controller with laser ray -->
+      <a-entity 
+        id="left-hand"
+        super-hands="colliderEvent: raycaster-intersection; colliderEventProperty: els; colliderEndEvent: raycaster-intersection-cleared; colliderEndEventProperty: clearedEls"
+        oculus-touch-controls="hand: left"
+        laser-controls="hand: left"
+        raycaster="objects: .draggable; far: 5; lineColor: #ff6b6b; lineOpacity: 0.8"
+        line="color: #ff6b6b; opacity: 0; visible: false"
+        laser-visibility>
+      </a-entity>
+
+      <!-- Right hand controller with laser ray -->
+      <a-entity 
+        id="right-hand"
+        super-hands="colliderEvent: raycaster-intersection; colliderEventProperty: els; colliderEndEvent: raycaster-intersection-cleared; colliderEndEventProperty: clearedEls"
+        oculus-touch-controls="hand: right"
+        laser-controls="hand: right"
+        raycaster="objects: .draggable; far: 5; lineColor: #6bcf7f; lineOpacity: 0.8"
+        line="color: #6bcf7f; opacity: 0; visible: false"
+        laser-visibility>
+      </a-entity>
+
+      <a-plane rotation="-90 0 0" width="20" height="20" color="#444"></a-plane>
+    </a-scene>
+  </body>
+</html>

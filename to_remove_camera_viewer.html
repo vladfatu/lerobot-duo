@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Camera Streams</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+        }
+        .camera-grid { 
+            display: flex; 
+            flex-wrap: wrap; 
+            gap: 20px; 
+        }
+        .camera-container { 
+            border: 1px solid #ccc; 
+            padding: 10px; 
+            border-radius: 5px; 
+        }
+        video { 
+            width: 320px; 
+            height: 240px; 
+            border: 1px solid #000; 
+        }
+        button { 
+            padding: 10px 20px; 
+            margin: 5px; 
+            background: #007bff; 
+            color: white; 
+            border: none; 
+            border-radius: 3px; 
+            cursor: pointer; 
+        }
+        button:hover { 
+            background: #0056b3; 
+        }
+        .status { 
+            margin: 20px 0; 
+            padding: 10px; 
+            border-radius: 5px; 
+            background: #f8f9fa; 
+            max-height: 200px; 
+            overflow-y: auto; 
+            font-size: 12px; 
+        }
+        .xr-button {
+            background: #28a745;
+            color: white;
+            font-size: 18px;
+            padding: 15px 30px;
+            margin: 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        .xr-button:hover {
+            background: #218838;
+        }
+        .xr-button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        .xr-panel {
+            position: absolute;
+            background: rgba(40, 40, 40, 0.9);
+            border: 2px solid #007bff;
+            border-radius: 10px;
+            padding: 20px;
+            user-select: none;
+            cursor: move;
+        }
+        .xr-panel h3 {
+            color: white;
+            margin-top: 0;
+        }
+        #xr-canvas {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: black;
+        }
+        .error { 
+            background-color: #f8d7da; 
+            color: #721c24; 
+        }
+        .success { 
+            background-color: #d4edda; 
+            color: #155724; 
+        }
+    </style>
+</head>
+<body>
+    <h1>Robot Camera Streams</h1>
+    <button id="enter-xr" class="xr-button" onclick="enterXR()">Enter VR</button>
+    <div id="xr-instructions" style="margin: 10px 0; padding: 10px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px; display: none;">
+        <strong>Quest 3 WebXR Setup:</strong><br>
+        1. Enable "WebXR" in Quest Browser settings<br>
+        2. Use HTTPS or access via <code>https://your-ip:8765</code><br>
+        3. Grant camera/motion permissions when prompted
+    </div>
+    <div id="cameras" class="camera-grid"></div>
+    
+    <canvas id="xr-canvas"></canvas>
+    
+    <h2>Logs</h2>
+    <div id="status" class="status">Loading...</div>
+    
+    <script>
+        let peerConnections = {};
+        let xrSession = null;
+        let xrRefSpace = null;
+        let gl = null;
+        let xrPanels = [];
+        let isDragging = false;
+        let dragTarget = null;
+        let shaderProgram = null;
+        let panelBuffers = {};
+        let videoTextures = {};
+        
+        const baseUrl = window.location.origin;
+        
+        function log(message) {
+            console.log(message);
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerHTML += '<br>' + new Date().toLocaleTimeString() + ': ' + message;
+        }
+        
+        function debugLog(message) {
+            // Always log to console for VR debugging
+            console.log('VR_DEBUG:', message);
+        }
+        
+        function checkGLError(operation) {
+            const error = gl.getError();
+            if (error !== gl.NO_ERROR) {
+                debugLog(`WebGL Error after ${operation}: ${error}`);
+                return false;
+            }
+            return true;
+        }
+        
+        async function startStream(cameraName) {
+            try {
+                log('Starting stream for ' + cameraName);
+                
+                const pc = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun.services.mozilla.com' }
+                    ]
+                });
+                
+                peerConnections[cameraName] = pc;
+                
+                pc.ontrack = function(event) {
+                    log('Received video track for ' + cameraName);
+                    const video = document.getElementById('video-' + cameraName);
+                    if (video) {
+                        video.srcObject = event.streams[0];
+                    }
+                };
+                
+                pc.oniceconnectionstatechange = function() {
+                    log('ICE state for ' + cameraName + ': ' + pc.iceConnectionState);
+                };
+                
+                pc.onconnectionstatechange = function() {
+                    log('Connection state for ' + cameraName + ': ' + pc.connectionState);
+                };
+                
+                // Add transceiver to receive video
+                pc.addTransceiver('video', {direction: 'recvonly'});
+                
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                
+                log('Sending offer to server for ' + cameraName);
+                
+                const response = await fetch(baseUrl + '/offer', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        sdp: offer.sdp,
+                        type: offer.type,
+                        camera: cameraName
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
+                }
+                
+                const answer = await response.json();
+                await pc.setRemoteDescription(new RTCSessionDescription(answer));
+                
+                log('WebRTC connection established for ' + cameraName);
+                
+            } catch (error) {
+                log('Error starting stream for ' + cameraName + ': ' + error.message);
+                console.error('Full error:', error);
+            }
+        }
+        
+        async function loadCameras() {
+            try {
+                log('Loading camera list from: ' + baseUrl + '/cameras');
+                
+                const response = await fetch(baseUrl + '/cameras', {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
+                }
+                
+                const cameras = await response.json();
+                log('Found cameras: ' + cameras.join(', '));
+                
+                const camerasDiv = document.getElementById('cameras');
+                camerasDiv.innerHTML = '';
+                
+                cameras.forEach(camera => {
+                    const container = document.createElement('div');
+                    container.className = 'camera-container';
+                    container.innerHTML = `
+                        <h3>${camera}</h3>
+                        <video id="video-${camera}" autoplay muted playsinline></video><br>
+                        <button onclick="startStream('${camera}')">Start Stream</button>
+                        <button onclick="stopStream('${camera}')">Stop Stream</button>
+                    `;
+                    camerasDiv.appendChild(container);
+                });
+                
+            } catch (error) {
+                log('Error loading cameras: ' + error.message);
+                console.error('Full error:', error);
+            }
+        }
+        
+        function stopStream(cameraName) {
+            if (peerConnections[cameraName]) {
+                peerConnections[cameraName].close();
+                delete peerConnections[cameraName];
+                log('Stopped stream for ' + cameraName);
+            }
+        }
+        
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            log('Page loaded. Server: ' + baseUrl);
+            loadCameras();
+        });
+        
+        // Test server connectivity
+        fetch(baseUrl + '/cameras')
+            .then(response => {
+                if (response.ok) {
+                    log('✅ Server is reachable');
+                } else {
+                    log('❌ Server responded with error: ' + response.status);
+                }
+            })
+            .catch(error => {
+                log('❌ Cannot reach server: ' + error.message);
+            });
+        
+        // WebXR Functions
+        async function checkXRSupport() {
+            log('Checking WebXR support...');
+            
+            // Check if running on HTTPS (required for WebXR)
+            if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
+                document.getElementById('enter-xr').disabled = true;
+                document.getElementById('enter-xr').textContent = 'HTTPS Required for WebXR';
+                log('❌ WebXR requires HTTPS or localhost');
+                return false;
+            }
+            
+            if (!navigator.xr) {
+                document.getElementById('enter-xr').disabled = true;
+                document.getElementById('enter-xr').textContent = 'WebXR Not Supported';
+                document.getElementById('xr-instructions').style.display = 'block';
+                log('❌ navigator.xr not available');
+                return false;
+            }
+            
+            log('✅ navigator.xr detected');
+            
+            try {
+                // Try different session types
+                const vrSupported = await navigator.xr.isSessionSupported('immersive-vr');
+                log('VR support check: ' + vrSupported);
+                
+                if (!vrSupported) {
+                    // Try inline session as fallback
+                    const inlineSupported = await navigator.xr.isSessionSupported('inline');
+                    log('Inline XR support: ' + inlineSupported);
+                    
+                    if (inlineSupported) {
+                        document.getElementById('enter-xr').textContent = 'Enter XR (Inline Mode)';
+                        return 'inline';
+                    } else {
+                        document.getElementById('enter-xr').disabled = true;
+                        document.getElementById('enter-xr').textContent = 'VR Not Available - Enable WebXR';
+                        log('❌ No XR sessions supported. Try enabling WebXR in Quest browser settings.');
+                        return false;
+                    }
+                }
+                
+                log('✅ Immersive VR supported');
+                return 'immersive-vr';
+                
+            } catch (error) {
+                log('XR support check failed: ' + error.message);
+                document.getElementById('enter-xr').disabled = true;
+                document.getElementById('enter-xr').textContent = 'XR Check Failed';
+                return false;
+            }
+        }
+        
+        let supportedSessionType = null;
+        
+        async function enterXR() {
+            if (!navigator.xr || !supportedSessionType) {
+                log('WebXR not available');
+                return;
+            }
+            
+            // Check if we have active camera streams first
+            const activeCameras = Object.keys(peerConnections).filter(name => 
+                peerConnections[name] && peerConnections[name].connectionState === 'connected'
+            );
+            
+            if (activeCameras.length === 0) {
+                log('⚠️ No active camera streams! Start camera streams before entering VR.');
+                alert('Please start camera streams before entering VR');
+                return;
+            }
+            
+            try {
+                log('Requesting ' + supportedSessionType + ' session...');
+                
+                const sessionOptions = {
+                    optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
+                };
+                
+                // Add required features only for immersive VR
+                if (supportedSessionType === 'immersive-vr') {
+                    sessionOptions.requiredFeatures = ['local-floor'];
+                }
+                
+                xrSession = await navigator.xr.requestSession(supportedSessionType, sessionOptions);
+                
+                log('XR session started: ' + supportedSessionType);
+                log('Active cameras: ' + activeCameras.join(', '));
+                await setupXRSession();
+                
+            } catch (error) {
+                log('Failed to enter XR: ' + error.message);
+                log('Try: 1) Enable WebXR in Quest browser 2) Use HTTPS 3) Check browser permissions');
+            }
+        }
+        
+        async function setupXRSession() {
+            debugLog('Setting up XR session...');
+            
+            const canvas = document.getElementById('xr-canvas');
+            canvas.style.display = 'block';
+            
+            gl = canvas.getContext('webgl', { xrCompatible: true });
+            if (!gl) {
+                throw new Error('WebGL not supported');
+            }
+            
+            debugLog('WebGL context created');
+            
+            await gl.makeXRCompatible();
+            const layer = new XRWebGLLayer(xrSession, gl);
+            
+            xrSession.updateRenderState({
+                baseLayer: layer
+            });
+            
+            debugLog('XR layer created');
+            
+            xrRefSpace = await xrSession.requestReferenceSpace('local-floor');
+            debugLog('Reference space created');
+            
+            // Initialize WebGL for VR rendering
+            if (!initWebGL()) {
+                log('❌ Failed to initialize WebGL, cannot enter VR');
+                return;
+            }
+            
+            debugLog('WebGL initialized');
+            
+            // Setup VR camera panels
+            setupXRPanels();
+            
+            // Start render loop
+            debugLog('Starting XR render loop');
+            xrSession.requestAnimationFrame(onXRFrame);
+            
+            // Handle session end
+            xrSession.addEventListener('end', () => {
+                xrSession = null;
+                canvas.style.display = 'none';
+                debugLog('VR session ended');
+                log('VR session ended');
+            });
+            
+            // Setup input handling for controller interaction
+            setupXRInput();
+            
+            debugLog('XR session setup complete');
+        }
+        
+        function setupXRPanels() {
+            // Get cameras that have active streams
+            const activeCameras = Object.keys(peerConnections).filter(name => 
+                peerConnections[name] && peerConnections[name].connectionState === 'connected'
+            );
+            
+            if (activeCameras.length === 0) {
+                log('⚠️ No active camera streams found. Start camera streams first.');
+                return;
+            }
+            
+            xrPanels = [];
+            
+            // HARDCODED: Only create ONE panel for debugging - COMFORTABLE DISTANCE
+            const cameraName = activeCameras[0]; // Use first camera only
+            const panel = {
+                name: cameraName,
+                position: [
+                    0,     // X: center
+                    1.6,   // Y: above eye level
+                    -1.5   // Z: comfortable viewing distance (was -0.8, now -1.5)
+                ],
+                rotation: [0, 0, 0],
+                scale: [2.0, 1.5, 0.1], // Large size
+                isDragging: false,
+                video: document.getElementById('video-' + cameraName)
+            };
+            xrPanels.push(panel);
+            debugLog(`HARDCODED: Created LARGE CLOSE panel ${cameraName} at position [${panel.position.join(', ')}] scale [${panel.scale.join(', ')}]`);
+            
+            log(`HARDCODED: Created 1 LARGE CLOSE VR camera panel for: ${cameraName} (ignoring other ${activeCameras.length - 1} cameras)`);
+        }
+        
+        function setupXRInput() {
+            xrSession.addEventListener('inputsourceschange', (event) => {
+                event.added.forEach((inputSource) => {
+                    if (inputSource.targetRayMode === 'tracked-pointer') {
+                        log('Controller detected: ' + inputSource.handedness);
+                    }
+                });
+            });
+        }
+        
+        function onXRFrame(time, frame) {
+            debugLog('XR Frame rendering...');
+            
+            const session = frame.session;
+            session.requestAnimationFrame(onXRFrame);
+            
+            const pose = frame.getViewerPose(xrRefSpace);
+            if (!pose) {
+                debugLog('No pose available');
+                return;
+            }
+            
+            const layer = session.renderState.baseLayer;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+            
+            // Clear with a visible color to test if VR is working
+            gl.clearColor(0.2, 0.4, 0.8, 1.0); // Blue background
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            
+            debugLog('Cleared framebuffer, views: ' + pose.views.length);
+            
+            // Handle input for each controller
+            try {
+                handleXRInput(frame);
+            } catch (error) {
+                debugLog('Input error: ' + error.message);
+            }
+            
+            // Render for each eye
+            for (let i = 0; i < pose.views.length; i++) {
+                const view = pose.views[i];
+                const viewport = layer.getViewport(view);
+                gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+                
+                debugLog(`Rendering eye ${i}, viewport: ${viewport.width}x${viewport.height}`);
+                
+                // Set up projection matrix for this eye
+                if (shaderProgram && shaderProgram.projectionMatrix) {
+                    gl.uniformMatrix4fv(shaderProgram.projectionMatrix, false, view.projectionMatrix);
+                }
+                
+                // Use the view transform matrix (not inverse) for proper world positioning
+                const viewMatrix = view.transform.matrix;
+                
+                // Render camera panels and controllers
+                try {
+                    renderXRPanels(viewMatrix);
+                    renderControllers(frame, viewMatrix);
+                } catch (error) {
+                    debugLog('Render error: ' + error.message);
+                }
+            }
+        }
+        
+        function handleXRInput(frame) {
+            const inputSources = xrSession.inputSources;
+            
+            for (const inputSource of inputSources) {
+                if (inputSource.gamepad) {
+                    const gamepad = inputSource.gamepad;
+                    
+                    // Check for trigger press (index 0 is usually the trigger)
+                    if (gamepad.buttons[0] && gamepad.buttons[0].pressed) {
+                        // Raycast to see if we're pointing at a panel
+                        const targetPanel = raycastToPanels(inputSource, frame);
+                        
+                        if (targetPanel && !targetPanel.isDragging) {
+                            targetPanel.isDragging = true;
+                            dragTarget = targetPanel;
+                            log('Grabbing panel: ' + targetPanel.name);
+                        }
+                    } else if (dragTarget) {
+                        // Release the panel
+                        dragTarget.isDragging = false;
+                        log('Released panel: ' + dragTarget.name);
+                        dragTarget = null;
+                    }
+                    
+                    // Update panel position if being dragged
+                    if (dragTarget && inputSource.targetRaySpace) {
+                        const pose = frame.getPose(inputSource.targetRaySpace, xrRefSpace);
+                        if (pose) {
+                            dragTarget.position = [
+                                pose.transform.position.x,
+                                pose.transform.position.y,
+                                pose.transform.position.z - 0.5 // Offset from controller
+                            ];
+                        }
+                    }
+                }
+            }
+        }
+        
+        function raycastToPanels(inputSource, frame) {
+            if (!inputSource.targetRaySpace) return null;
+            
+            const pose = frame.getPose(inputSource.targetRaySpace, xrRefSpace);
+            if (!pose) return null;
+            
+            const ray = {
+                origin: pose.transform.position,
+                direction: {
+                    x: -pose.transform.orientation.x,
+                    y: -pose.transform.orientation.y,
+                    z: -pose.transform.orientation.z
+                }
+            };
+            
+            // Simple distance-based selection for now
+            let closestPanel = null;
+            let closestDistance = Infinity;
+            
+            xrPanels.forEach(panel => {
+                const distance = Math.sqrt(
+                    Math.pow(panel.position[0] - ray.origin.x, 2) +
+                    Math.pow(panel.position[1] - ray.origin.y, 2) +
+                    Math.pow(panel.position[2] - ray.origin.z, 2)
+                );
+                
+                if (distance < 2.0 && distance < closestDistance) {
+                    closestDistance = distance;
+                    closestPanel = panel;
+                }
+            });
+            
+            return closestPanel;
+        }
+        
+        function renderXRPanels(viewMatrix) {
+            try {
+                debugLog('renderXRPanels called');
+                
+                if (!gl) {
+                    debugLog('❌ No WebGL context');
+                    return;
+                }
+                
+                if (!shaderProgram) {
+                    debugLog('❌ No shader program');
+                    return;
+                }
+                
+                // Enable depth testing
+                gl.enable(gl.DEPTH_TEST);
+                gl.depthFunc(gl.LEQUAL);
+                
+                // Use our shader program
+                gl.useProgram(shaderProgram);
+                
+                debugLog('Rendering ' + xrPanels.length + ' panels');
+                
+                // If no panels, render a simple test quad
+                if (xrPanels.length === 0) {
+                    renderTestQuad(viewMatrix);
+                    return;
+                }
+                
+                xrPanels.forEach((panel, index) => {
+                    debugLog(`Rendering panel: ${panel.name} at [${panel.position.join(', ')}] scale [${panel.scale.join(', ')}]`);
+                    
+                    // Update video texture if video is ready
+                    if (panel.video && panel.video.readyState >= 2) {
+                        debugLog(`Panel ${panel.name} has video ready (state: ${panel.video.readyState})`);
+                        updateVideoTexture(panel.name, panel.video);
+                    } else {
+                        debugLog(`Panel ${panel.name} video not ready (state: ${panel.video ? panel.video.readyState : 'no video'})`);
+                    }
+                    
+                    // Render the panel (will use colored fallback if no video)
+                    renderPanel(panel, viewMatrix);
+                });
+                
+            } catch (error) {
+                debugLog('❌ Error in renderXRPanels: ' + error.message);
+            }
+        }
+        
+        function renderTestQuad() {
+            debugLog('Rendering test quad');
+            
+            // Create a simple test quad if we don't have camera panels
+            if (!panelBuffers['test']) {
+                createPanelBuffers('test');
+            }
+            
+            const buffers = panelBuffers['test'];
+            if (!buffers) return;
+            
+            // Create simple model view matrix
+            const modelViewMatrix = mat4.create();
+            mat4.translate(modelViewMatrix, modelViewMatrix, [0, 0, -2]);
+            
+            // Set up position attribute
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffers.position);
+            gl.vertexAttribPointer(shaderProgram.vertexPosition, 3, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(shaderProgram.vertexPosition);
+            
+            // Set up texture coordinate attribute
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffers.textureCoord);
+            gl.vertexAttribPointer(shaderProgram.textureCoord, 2, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(shaderProgram.textureCoord);
+            
+            // Set up index buffer
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.indices);
+            
+            // Set uniforms
+            gl.uniformMatrix4fv(shaderProgram.modelViewMatrix, false, modelViewMatrix);
+            gl.uniform1f(shaderProgram.uHasTexture, 0.0); // Use colored fallback
+            
+            // Draw the test quad
+            gl.drawElements(gl.TRIANGLES, buffers.indexCount, gl.UNSIGNED_SHORT, 0);
+            debugLog('Test quad drawn');
+        }
+        
+        function initWebGL() {
+            try {
+                log('Initializing WebGL...');
+                
+                // Create shader program
+                const vertexShaderSource = `
+                    attribute vec4 aVertexPosition;
+                    attribute vec2 aTextureCoord;
+                    
+                    uniform mat4 uModelViewMatrix;
+                    uniform mat4 uProjectionMatrix;
+                    
+                    varying vec2 vTextureCoord;
+                    
+                    void main() {
+                        gl_Position = uProjectionMatrix * uModelViewMatrix * aVertexPosition;
+                        vTextureCoord = aTextureCoord;
+                    }
+                `;
+                
+                const fragmentShaderSource = `
+                    precision mediump float;
+                    
+                    varying vec2 vTextureCoord;
+                    uniform sampler2D uSampler;
+                    uniform float uHasTexture;
+                    
+                    void main() {
+                        if (uHasTexture > 0.5) {
+                            gl_FragColor = texture2D(uSampler, vTextureCoord);
+                        } else {
+                            // Bright fallback colored quad for testing
+                            gl_FragColor = vec4(0.8 + vTextureCoord.x * 0.2, 0.8 + vTextureCoord.y * 0.2, 0.2, 1.0);
+                        }
+                    }
+                `;
+                
+                const vertexShader = createShader(gl.VERTEX_SHADER, vertexShaderSource);
+                const fragmentShader = createShader(gl.FRAGMENT_SHADER, fragmentShaderSource);
+                
+                if (!vertexShader || !fragmentShader) {
+                    log('❌ Failed to create shaders');
+                    return false;
+                }
+                
+                shaderProgram = gl.createProgram();
+                gl.attachShader(shaderProgram, vertexShader);
+                gl.attachShader(shaderProgram, fragmentShader);
+                gl.linkProgram(shaderProgram);
+                
+                if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+                    log('❌ Unable to initialize shader program: ' + gl.getProgramInfoLog(shaderProgram));
+                    return false;
+                }
+                
+                // Get attribute and uniform locations
+                shaderProgram.vertexPosition = gl.getAttribLocation(shaderProgram, 'aVertexPosition');
+                shaderProgram.textureCoord = gl.getAttribLocation(shaderProgram, 'aTextureCoord');
+                shaderProgram.projectionMatrix = gl.getUniformLocation(shaderProgram, 'uProjectionMatrix');
+                shaderProgram.modelViewMatrix = gl.getUniformLocation(shaderProgram, 'uModelViewMatrix');
+                shaderProgram.uSampler = gl.getUniformLocation(shaderProgram, 'uSampler');
+                shaderProgram.uHasTexture = gl.getUniformLocation(shaderProgram, 'uHasTexture');
+                
+                // Debug attribute locations
+                debugLog('Shader attribute locations:');
+                debugLog(`  vertexPosition: ${shaderProgram.vertexPosition}`);
+                debugLog(`  textureCoord: ${shaderProgram.textureCoord}`);
+                debugLog(`  projectionMatrix: ${shaderProgram.projectionMatrix}`);
+                debugLog(`  modelViewMatrix: ${shaderProgram.modelViewMatrix}`);
+                debugLog(`  uSampler: ${shaderProgram.uSampler}`);
+                debugLog(`  uHasTexture: ${shaderProgram.uHasTexture}`);
+                debugLog(`WebGL constants: FLOAT=${gl.FLOAT}, TRIANGLES=${gl.TRIANGLES}, UNSIGNED_SHORT=${gl.UNSIGNED_SHORT}`);
+                
+                // Validate critical attributes
+                if (shaderProgram.vertexPosition === -1) {
+                    log('❌ Failed to get aVertexPosition attribute location');
+                    return false;
+                }
+                if (shaderProgram.textureCoord === -1) {
+                    log('❌ Failed to get aTextureCoord attribute location');
+                    return false;
+                }
+                
+                log('✅ WebGL initialized successfully');
+                return true;
+                
+            } catch (error) {
+                log('❌ WebGL initialization failed: ' + error.message);
+                return false;
+            }
+        }
+        
+        function createShader(type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                log('❌ Error compiling shader: ' + gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            
+            return shader;
+        }
+        
+        function createPanelBuffers(panelName) {
+            debugLog(`Creating buffers for panel: ${panelName}`);
+            
+            // Create quad vertices for the panel
+            const positions = [
+                -0.5, -0.375, 0.0,  // Bottom left
+                 0.5, -0.375, 0.0,  // Bottom right
+                 0.5,  0.375, 0.0,  // Top right
+                -0.5,  0.375, 0.0,  // Top left
+            ];
+            
+            const textureCoords = [
+                0.0, 1.0,  // Bottom left
+                1.0, 1.0,  // Bottom right
+                1.0, 0.0,  // Top right
+                0.0, 0.0,  // Top left
+            ];
+            
+            const indices = [0, 1, 2, 0, 2, 3];
+            
+            const positionBuffer = gl.createBuffer();
+            if (!positionBuffer) {
+                debugLog('❌ Failed to create position buffer');
+                return;
+            }
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+            
+            const textureCoordBuffer = gl.createBuffer();
+            if (!textureCoordBuffer) {
+                debugLog('❌ Failed to create texture coord buffer');
+                return;
+            }
+            gl.bindBuffer(gl.ARRAY_BUFFER, textureCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
+            
+            const indexBuffer = gl.createBuffer();
+            if (!indexBuffer) {
+                debugLog('❌ Failed to create index buffer');
+                return;
+            }
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+            
+            panelBuffers[panelName] = {
+                position: positionBuffer,
+                textureCoord: textureCoordBuffer,
+                indices: indexBuffer,
+                indexCount: indices.length
+            };
+            
+            debugLog(`✅ Created buffers for panel: ${panelName}`);
+        }
+        
+        function updateVideoTexture(panelName, video) {
+            if (!videoTextures[panelName]) {
+                videoTextures[panelName] = gl.createTexture();
+            }
+            
+            gl.bindTexture(gl.TEXTURE_2D, videoTextures[panelName]);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.MAG_FILTER, gl.LINEAR);
+        }
+        
+        function renderPanel(panel, viewMatrix) {
+            try {
+                debugLog(`Starting renderPanel for ${panel.name}`);
+                
+                const buffers = panelBuffers[panel.name];
+                if (!buffers) {
+                    debugLog(`Creating buffers for ${panel.name}`);
+                    createPanelBuffers(panel.name);
+                    return;
+                }
+                
+                // Validate buffers exist
+                if (!buffers.position || !buffers.textureCoord || !buffers.indices) {
+                    debugLog(`❌ Invalid buffers for ${panel.name}`);
+                    return;
+                }
+                
+                debugLog(`Buffers valid for ${panel.name}`);
+                
+                // Create model matrix for panel position
+                const modelMatrix = mat4.create();
+                mat4.translate(modelMatrix, modelMatrix, panel.position);
+                mat4.scale(modelMatrix, modelMatrix, panel.scale);
+                
+                // Combine view matrix with model matrix for proper world-space positioning
+                const modelViewMatrix = mat4.create();
+                if (viewMatrix) {
+                    // View matrix transforms from world to eye space, model matrix positions in world
+                    mat4.multiply(modelViewMatrix, viewMatrix, modelMatrix);
+                    debugLog(`Panel ${panel.name} using view matrix for world positioning`);
+                } else {
+                    // Fallback if no view matrix
+                    for (let i = 0; i < 16; i++) {
+                        modelViewMatrix[i] = modelMatrix[i];
+                    }
+                    debugLog(`Panel ${panel.name} using fallback matrix (no view matrix)`);
+                }
+                
+                debugLog(`Panel ${panel.name} modelViewMatrix setup complete`);
+                
+                // Validate attribute locations
+                if (shaderProgram.vertexPosition === -1 || shaderProgram.textureCoord === -1) {
+                    debugLog(`❌ Invalid attribute locations`);
+                    return;
+                }
+                
+                // Set up position attribute
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffers.position);
+                gl.vertexAttribPointer(shaderProgram.vertexPosition, 3, gl.FLOAT, false, 0, 0);
+                gl.enableVertexAttribArray(shaderProgram.vertexPosition);
+                
+                // Set up texture coordinate attribute
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffers.textureCoord);
+                gl.vertexAttribPointer(shaderProgram.textureCoord, 2, gl.FLOAT, false, 0, 0);
+                gl.enableVertexAttribArray(shaderProgram.textureCoord);
+                
+                // Set up index buffer
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.indices);
+                
+                // Set uniforms
+                gl.uniformMatrix4fv(shaderProgram.modelViewMatrix, false, modelViewMatrix);
+                
+                // FORCE colored fallback for debugging - ignore video texture for now
+                debugLog(`Panel ${panel.name} FORCING colored fallback for debugging`);
+                gl.uniform1f(shaderProgram.uHasTexture, 0.0);
+                
+                // Draw the panel
+                debugLog(`Drawing panel ${panel.name}`);
+                gl.drawElements(gl.TRIANGLES, buffers.indexCount, gl.UNSIGNED_SHORT, 0);
+                
+                debugLog(`✅ Panel ${panel.name} rendered successfully`);
+                
+            } catch (error) {
+                debugLog('❌ Error rendering panel ' + panel.name + ': ' + error.message);
+            }
+        }
+        
+        function renderControllers(frame, viewMatrix) {
+            try {
+                const inputSources = xrSession.inputSources;
+                
+                for (const inputSource of inputSources) {
+                    if (inputSource.gripSpace) {
+                        const pose = frame.getPose(inputSource.gripSpace, xrRefSpace);
+                        if (pose) {
+                            // Create a small controller representation
+                            const controllerPanel = {
+                                name: 'controller_' + inputSource.handedness,
+                                position: [
+                                    pose.transform.position.x,
+                                    pose.transform.position.y,
+                                    pose.transform.position.z
+                                ],
+                                scale: [0.1, 0.1, 0.3], // Small controller shape
+                                video: null // No video, just colored
+                            };
+                            
+                            debugLog(`Rendering ${inputSource.handedness} controller at [${controllerPanel.position.join(', ')}]`);
+                            renderPanel(controllerPanel, viewMatrix);
+                        }
+                    }
+                }
+            } catch (error) {
+                debugLog('Controller render error: ' + error.message);
+            }
+        }
+        
+        // Add gl-matrix library functions (simplified)
+        const mat4 = {
+            create() {
+                return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+            },
+            multiply(out, a, b) {
+                const a00 = a[0], a01 = a[1], a02 = a[2], a03 = a[3];
+                const a10 = a[4], a11 = a[5], a12 = a[6], a13 = a[7];
+                const a20 = a[8], a21 = a[9], a22 = a[10], a23 = a[11];
+                const a30 = a[12], a31 = a[13], a32 = a[14], a33 = a[15];
+                
+                const b00 = b[0], b01 = b[1], b02 = b[2], b03 = b[3];
+                const b10 = b[4], b11 = b[5], b12 = b[6], b13 = b[7];
+                const b20 = b[8], b21 = b[9], b22 = b[10], b23 = b[11];
+                const b30 = b[12], b31 = b[13], b32 = b[14], b33 = b[15];
+                
+                out[0] = a00*b00 + a01*b10 + a02*b20 + a03*b30;
+                out[1] = a00*b01 + a01*b11 + a02*b21 + a03*b31;
+                out[2] = a00*b02 + a01*b12 + a02*b22 + a03*b32;
+                out[3] = a00*b03 + a01*b13 + a02*b23 + a03*b33;
+                
+                out[4] = a10*b00 + a11*b10 + a12*b20 + a13*b30;
+                out[5] = a10*b01 + a11*b11 + a12*b21 + a13*b31;
+                out[6] = a10*b02 + a11*b12 + a12*b22 + a13*b32;
+                out[7] = a10*b03 + a11*b13 + a12*b23 + a13*b33;
+                
+                out[8] = a20*b00 + a21*b10 + a22*b20 + a23*b30;
+                out[9] = a20*b01 + a21*b11 + a22*b21 + a23*b31;
+                out[10] = a20*b02 + a21*b12 + a22*b22 + a23*b32;
+                out[11] = a20*b03 + a21*b13 + a22*b23 + a23*b33;
+                
+                out[12] = a30*b00 + a31*b10 + a32*b20 + a33*b30;
+                out[13] = a30*b01 + a31*b11 + a32*b21 + a33*b31;
+                out[14] = a30*b02 + a31*b12 + a32*b22 + a33*b32;
+                out[15] = a30*b03 + a31*b13 + a32*b23 + a33*b33;
+                
+                return out;
+            },
+            translate(out, a, v) {
+                // Copy the input matrix to output
+                for (let i = 0; i < 16; i++) {
+                    out[i] = a[i];
+                }
+                // Add translation
+                out[12] += v[0];
+                out[13] += v[1];
+                out[14] += v[2];
+                return out;
+            },
+            scale(out, a, v) {
+                // Copy the input matrix to output
+                for (let i = 0; i < 16; i++) {
+                    out[i] = a[i];
+                }
+                // Apply scaling
+                out[0] *= v[0]; out[1] *= v[0]; out[2] *= v[0]; out[3] *= v[0];
+                out[4] *= v[1]; out[5] *= v[1]; out[6] *= v[1]; out[7] *= v[1];
+                out[8] *= v[2]; out[9] *= v[2]; out[10] *= v[2]; out[11] *= v[2];
+                return out;
+            },
+            perspective(out, fovy, aspect, near, far) {
+                let f = 1.0 / Math.tan(fovy / 2), nf = 1 / (near - far);
+                out[0] = f / aspect; out[1] = 0; out[2] = 0; out[3] = 0;
+                out[4] = 0; out[5] = f; out[6] = 0; out[7] = 0;
+                out[8] = 0; out[9] = 0; out[10] = (far + near) * nf; out[11] = -1;
+                out[12] = 0; out[13] = 0; out[14] = (2 * far * near) * nf; out[15] = 0;
+                return out;
+            }
+        };
+        
+        // Initialize XR support check
+        document.addEventListener('DOMContentLoaded', function() {
+            checkXRSupport().then(result => {
+                supportedSessionType = result;
+                if (result) {
+                    log('✅ XR ready: ' + result);
+                } else {
+                    log('❌ XR not available');
+                }
+            });
+        });
+    </script>
+</body>
+</html>
