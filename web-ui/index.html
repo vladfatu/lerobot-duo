@@ -18,6 +18,7 @@
     <script src="js/components/look-at-headset.js"></script>
     <script src="js/components/webrtc-video.js"></script>
     <script src="js/components/panel-manager.js"></script>
+    <script src="js/components/controller-axes.js"></script>
   </head>
   <body>
     <a-scene>
@@ -38,7 +39,8 @@
         laser-controls="hand: left"
         raycaster="objects: .draggable; far: 5; lineColor: #ff6b6b; lineOpacity: 0.8"
         line="color: #ff6b6b; opacity: 0; visible: false"
-        laser-visibility>
+        laser-visibility
+        controller-axes="showPosition: true">
       </a-entity>
 
       <!-- Right hand controller with laser ray -->
@@ -49,7 +51,8 @@
         laser-controls="hand: right"
         raycaster="objects: .draggable; far: 5; lineColor: #6bcf7f; lineOpacity: 0.8"
         line="color: #6bcf7f; opacity: 0; visible: false"
-        laser-visibility>
+        laser-visibility
+        controller-axes="showPosition: true">
       </a-entity>
     </a-scene>
   </body>
