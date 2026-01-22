@@ -13,12 +13,14 @@
     <script src="https://unpkg.com/super-hands@3.0.5/dist/super-hands.min.js"></script>
     
     <!-- Application modules -->
+    <script src="js/websocket-manager.js"></script>
     <script src="js/webrtc-manager.js"></script>
     <script src="js/components/laser-visibility.js"></script>
     <script src="js/components/look-at-headset.js"></script>
     <script src="js/components/webrtc-video.js"></script>
     <script src="js/components/panel-manager.js"></script>
     <script src="js/components/controller-axes.js"></script>
+    <script src="js/components/websocket-panel.js"></script>
   </head>
   <body>
     <a-scene>
@@ -31,13 +33,16 @@
       <!-- Container for dynamically created panels -->
       <a-entity id="panel-container" panel-manager></a-entity>
 
+      <!-- WebSocket connection panel -->
+      <a-entity id="websocket-panel" websocket-panel></a-entity>
+
       <!-- Left hand controller with laser ray -->
       <a-entity 
         id="left-hand"
         super-hands="colliderEvent: raycaster-intersection; colliderEventProperty: els; colliderEndEvent: raycaster-intersection-cleared; colliderEndEventProperty: clearedEls"
         meta-touch-controls="hand: left; controllerType: quest3"
         laser-controls="hand: left"
-        raycaster="objects: .draggable; far: 5; lineColor: #ff6b6b; lineOpacity: 0.8"
+        raycaster="objects: .draggable, .clickable; far: 5; lineColor: #ff6b6b; lineOpacity: 0.8"
         line="color: #ff6b6b; opacity: 0; visible: false"
         laser-visibility
         controller-axes="showPosition: true">
@@ -49,7 +54,7 @@
         super-hands="colliderEvent: raycaster-intersection; colliderEventProperty: els; colliderEndEvent: raycaster-intersection-cleared; colliderEndEventProperty: clearedEls"
         meta-touch-controls="hand: right; controllerType: quest3"
         laser-controls="hand: right"
-        raycaster="objects: .draggable; far: 5; lineColor: #6bcf7f; lineOpacity: 0.8"
+        raycaster="objects: .draggable, .clickable; far: 5; lineColor: #6bcf7f; lineOpacity: 0.8"
         line="color: #6bcf7f; opacity: 0; visible: false"
         laser-visibility
         controller-axes="showPosition: true">

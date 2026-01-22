@@ -27,33 +27,10 @@ from lerobot.teleoperators.phone.teleop_phone import Phone
 from lerobot.utils.robot_utils import busy_wait
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
-from vr_headset import VRHeadset
+from server import VRHeadset, create_camera_server
 from vr_processor import MapVRActionToRobotAction
-from webrtc_camera_server import create_camera_server
 
 FPS = 30
-
-
-# TODO remove code for each arm and use BiSO100Follower instead
-# # Left Arm
-# left_camera_config = {
-#     "left_wrist": OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=FPS),
-#     "right_wrist": OpenCVCameraConfig(index_or_path=1, width=640, height=480, fps=FPS),
-#     "above": OpenCVCameraConfig(index_or_path=2, width=640, height=480, fps=FPS)
-# }
-# left_robot_config = SO100FollowerConfig(
-#     port="/dev/tty.usbmodem5A460842561", id="left_follower_arm", use_degrees=True, cameras=left_camera_config
-# )
-# # Right Arm
-# right_camera_config = {
-#     "right_wrist": OpenCVCameraConfig(index_or_path=1, width=640, height=480, fps=FPS)
-# }
-# right_robot_config = SO100FollowerConfig(
-#     port="/dev/tty.usbmodem58FA0963791", id="right_follower_arm", use_degrees=True, cameras=right_camera_config
-# )
-# left_arm = SO100Follower(left_robot_config)
-# right_arm = SO100Follower(right_robot_config)
-
 
 # Initialize the robot and teleoperator
 duo_camera_config = {
@@ -200,28 +177,32 @@ while True:
             print("Right controller not enabled.")
 
         right_joint_action = vr_to_right_arm_joints_processor((right_controller_obs, right_arm_obs))
-        # _ = right_arm.send_action(right_joint_action)
+        _ = duo_robot.right_arm.send_action(right_joint_action)
 
 
-        left_controller_obs = copy.deepcopy(vr_obs["left"])
-        # print(f"VR Observation: {left_controller_obs}")
+        # left_controller_obs = copy.deepcopy(vr_obs["left"])
+        # # print(f"VR Observation: {left_controller_obs}")
 
-        if left_controller_obs["enabled"]:
-            print(f"Left Arm VR Position: {left_controller_obs['pos']}")
-        else:
-            print("Left controller not enabled.")
+        # if left_controller_obs["enabled"]:
+        #     print(f"Left Arm VR Position: {left_controller_obs['pos']}")
+        # else:
+        #     print("Left controller not enabled.")
 
-        left_joint_action = vr_to_left_arm_joints_processor((left_controller_obs, left_arm_obs))
-        # _ = left_arm.send_action(left_joint_action)
+        # left_joint_action = vr_to_left_arm_joints_processor((left_controller_obs, left_arm_obs))
+        # # _ = left_arm.send_action(left_joint_action)
 
-        # Add prefixes back
-        prefixed_send_action_left = {f"left_{key}": value for key, value in left_joint_action.items()}
-        prefixed_send_action_right = {f"right_{key}": value for key, value in right_joint_action.items()}
+        # # Add prefixes back
+        # prefixed_send_action_left = {f"left_{key}": value for key, value in left_joint_action.items()}
+        # prefixed_send_action_right = {f"right_{key}": value for key, value in right_joint_action.items()}
 
-        joint_action = {**prefixed_send_action_left, **prefixed_send_action_right}
+        # joint_action = {**prefixed_send_action_left, **prefixed_send_action_right}
     
-        _ = duo_robot.send_action(joint_action)
+        # _ = duo_robot.send_action(joint_action)
 
-    busy_wait(max(1.0 / FPS - (time.perf_counter() - t0), 0.0))
+    # busy_wait(max(1.0 / FPS - (time.perf_counter() - t0), 0.0))
+
+    ## TODO remove - for testing only
+    teleoperation_fps = 1
+    busy_wait(max(1.0 / teleoperation_fps - (time.perf_counter() - t0), 0.0))
 
 

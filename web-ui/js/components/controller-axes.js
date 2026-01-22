@@ -23,9 +23,22 @@ AFRAME.registerComponent('controller-axes', {
     this.grabYawAngle = 0; // Y-axis rotation at grab time
     this.grabYawQuaternion = new THREE.Quaternion(); // For rotating axes to match grab direction
     
+    // Determine which hand this controller is
+    this.hand = this.el.id === 'right-hand' ? 'right' : 'left';
+    
+    // Joystick Y value (thumbstick forward/backward)
+    this.joystickY = 0;
+    
+    // Current delta values for WebSocket transmission
+    this.currentDelta = {
+      position: new THREE.Vector3(),
+      rotation: new THREE.Euler()
+    };
+    
     // Bind event handlers
     this.onGripDown = this.onGripDown.bind(this);
     this.onGripUp = this.onGripUp.bind(this);
+    this.onThumbstickMoved = this.onThumbstickMoved.bind(this);
     
     // Listen for grip/squeeze button events
     this.el.addEventListener('gripdown', this.onGripDown);
@@ -33,8 +46,23 @@ AFRAME.registerComponent('controller-axes', {
     this.el.addEventListener('squeezestart', this.onGripDown);
     this.el.addEventListener('squeezeend', this.onGripUp);
     
+    // Listen for thumbstick/joystick events
+    this.el.addEventListener('thumbstickmoved', this.onThumbstickMoved);
+    this.el.addEventListener('axismove', this.onThumbstickMoved);
+    
     this.createAxes();
     this.tick = AFRAME.utils.throttleTick(this.tick, 16, this); // ~60fps for smooth rotation
+  },
+
+  onThumbstickMoved: function(evt) {
+    // Get Y axis value from thumbstick (forward/backward)
+    // evt.detail.y is typically -1 (forward) to 1 (backward)
+    if (evt.detail && typeof evt.detail.y === 'number') {
+      this.joystickY = evt.detail.y;
+    } else if (evt.detail && evt.detail.axis && evt.detail.axis.length >= 2) {
+      // axismove event format: axis[0] = x, axis[1] = y
+      this.joystickY = evt.detail.axis[1];
+    }
   },
 
   onGripDown: function() {
@@ -216,6 +244,34 @@ AFRAME.registerComponent('controller-axes', {
       this.yAxis.label.setAttribute('value', `${prefix}Y: ${displayY.toFixed(0)}°`);
       this.zAxis.label.setAttribute('value', `${prefix}Z: ${displayZ.toFixed(0)}°`);
     }
+    
+    // Send controller delta data via WebSocket if connected
+    if (window.webSocketManager && window.webSocketManager.isConnected) {
+      // Position as [x, y, z] array (delta when grabbing, zero otherwise)
+      const pos = this.isGrabbing ? 
+        [displayX || 0, displayY || 0, -displayZ || 0] : 
+        [0, 0, 0];
+      
+      // Rotation as quaternion [x, y, z, w] array
+      // Get current quaternion from controller
+      const quaternion = this.el.object3D.quaternion;
+      const rot = [quaternion.x, quaternion.y, quaternion.z, quaternion.w];
+      
+      // enabled = isGrabbing
+      const enabled = this.isGrabbing;
+      
+      // Update controller data in WebSocket manager (PosePacket format)
+      window.webSocketManager.updateControllerData(
+        this.hand,
+        pos,
+        rot,
+        this.joystickY,
+        enabled
+      );
+      
+      // Send data (the manager will batch both controllers' data as FramePacket)
+      window.webSocketManager.sendControllerData();
+    }
   },
 
   remove: function() {
@@ -224,6 +280,8 @@ AFRAME.registerComponent('controller-axes', {
     this.el.removeEventListener('gripup', this.onGripUp);
     this.el.removeEventListener('squeezestart', this.onGripDown);
     this.el.removeEventListener('squeezeend', this.onGripUp);
+    this.el.removeEventListener('thumbstickmoved', this.onThumbstickMoved);
+    this.el.removeEventListener('axismove', this.onThumbstickMoved);
     
     if (this.axesContainer && this.axesContainer.parentNode) {
       this.axesContainer.parentNode.removeChild(this.axesContainer);

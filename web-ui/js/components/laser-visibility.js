@@ -1,37 +1,11 @@
 /**
  * Laser Visibility Component
- * Shows/hides laser ray when hovering over or grabbing draggable objects
+ * Shows laser ray always visible (previously only on hover)
  */
 AFRAME.registerComponent('laser-visibility', {
   init: function() {
-    this.bindEvents();
-  },
-
-  bindEvents: function() {
-    // Show laser when intersecting with draggable objects
-    this.el.addEventListener('raycaster-intersection', (e) => {
-      const intersectedEl = e.detail.els[0];
-      if (intersectedEl && intersectedEl.classList.contains('draggable')) {
-        this.showLaser();
-      }
-    });
-
-    // Hide laser when no longer intersecting (unless grabbing)
-    this.el.addEventListener('raycaster-intersection-cleared', (e) => {
-      const isGrabbing = this.el.components['super-hands'] && 
-                         this.el.components['super-hands'].state.includes('grab');
-      if (!isGrabbing) {
-        this.hideLaser();
-      }
-    });
-
-    // Show laser on grip/trigger press
-    this.el.addEventListener('grip-down', () => this.showLaser());
-    this.el.addEventListener('trigger-down', () => this.showLaser());
-
-    // Hide laser on grip/trigger release
-    this.el.addEventListener('grip-up', () => this.hideLaser());
-    this.el.addEventListener('trigger-up', () => this.hideLaser());
+    // Show laser immediately on init
+    this.showLaser();
   },
 
   showLaser: function() {
