@@ -180,16 +180,16 @@ while True:
         _ = duo_robot.right_arm.send_action(right_joint_action)
 
 
-        # left_controller_obs = copy.deepcopy(vr_obs["left"])
-        # # print(f"VR Observation: {left_controller_obs}")
+        left_controller_obs = copy.deepcopy(vr_obs["left"])
+        # print(f"VR Observation: {left_controller_obs}")
 
-        # if left_controller_obs["enabled"]:
-        #     print(f"Left Arm VR Position: {left_controller_obs['pos']}")
-        # else:
-        #     print("Left controller not enabled.")
+        if left_controller_obs["enabled"]:
+            print(f"Left Arm VR Position: {left_controller_obs['pos']}")
+        else:
+            print("Left controller not enabled.")
 
-        # left_joint_action = vr_to_left_arm_joints_processor((left_controller_obs, left_arm_obs))
-        # # _ = left_arm.send_action(left_joint_action)
+        left_joint_action = vr_to_left_arm_joints_processor((left_controller_obs, left_arm_obs))
+        _ = duo_robot.left_arm.send_action(left_joint_action)
 
         # # Add prefixes back
         # prefixed_send_action_left = {f"left_{key}": value for key, value in left_joint_action.items()}
@@ -202,7 +202,7 @@ while True:
     # busy_wait(max(1.0 / FPS - (time.perf_counter() - t0), 0.0))
 
     ## TODO remove - for testing only
-    teleoperation_fps = 1
+    teleoperation_fps = 20
     busy_wait(max(1.0 / teleoperation_fps - (time.perf_counter() - t0), 0.0))
 
 

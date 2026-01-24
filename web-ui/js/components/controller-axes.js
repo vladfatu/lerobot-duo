@@ -249,7 +249,7 @@ AFRAME.registerComponent('controller-axes', {
     if (window.webSocketManager && window.webSocketManager.isConnected) {
       // Position as [x, y, z] array (delta when grabbing, zero otherwise)
       const pos = this.isGrabbing ? 
-        [displayX || 0, displayY || 0, -displayZ || 0] : 
+        [displayX || 0, displayY || 0, displayZ || 0] : 
         [0, 0, 0];
       
       // Rotation as quaternion [x, y, z, w] array
