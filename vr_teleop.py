@@ -34,9 +34,9 @@ FPS = 30
 
 # Initialize the robot and teleoperator
 duo_camera_config = {
-    "left_wrist": OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=FPS),
-    "right_wrist": OpenCVCameraConfig(index_or_path=1, width=640, height=480, fps=FPS),
-    "above": OpenCVCameraConfig(index_or_path=2, width=640, height=480, fps=FPS)
+    "left_wrist": OpenCVCameraConfig(index_or_path=1, width=640, height=480, fps=FPS),
+    "right_wrist": OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=FPS),
+    "main": OpenCVCameraConfig(index_or_path=2, width=640, height=480, fps=FPS)
 }
 duo_robot_config = BiSO100FollowerConfig(
     left_arm_port="/dev/tty.usbmodem5A460842561", 
@@ -145,15 +145,15 @@ while True:
         # Get frames from cameras
         left_wrist_frame = duo_robot.cameras["left_wrist"].async_read(timeout_ms=50)
         right_wrist_frame = duo_robot.cameras["right_wrist"].async_read(timeout_ms=50)
-        above_frame = duo_robot.cameras["above"].async_read(timeout_ms=500)
+        main_frame = duo_robot.cameras["main"].async_read(timeout_ms=500)
         
         # Update WebRTC streams
         if left_wrist_frame is not None:
             camera_server.update_camera_frame("left_wrist", left_wrist_frame)
         if right_wrist_frame is not None:
             camera_server.update_camera_frame("right_wrist", right_wrist_frame)
-        if above_frame is not None:
-            camera_server.update_camera_frame("above", above_frame)
+        if main_frame is not None:
+            camera_server.update_camera_frame("main", main_frame)
             
     except Exception as e:
         print(f"Error capturing camera frames: {e}")

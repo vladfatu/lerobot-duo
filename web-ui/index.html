@@ -17,8 +17,7 @@
     <script src="js/webrtc-manager.js"></script>
     <script src="js/components/laser-visibility.js"></script>
     <script src="js/components/look-at-headset.js"></script>
-    <script src="js/components/webrtc-video.js"></script>
-    <script src="js/components/panel-manager.js"></script>
+    <script src="js/components/video-panel.js"></script>
     <script src="js/components/controller-axes.js"></script>
     <script src="js/components/websocket-panel.js"></script>
   </head>
@@ -31,7 +30,7 @@
       <a-plane rotation="-90 0 0" width="20" height="20" color="#444"></a-plane>
 
       <!-- Container for dynamically created panels -->
-      <a-entity id="panel-container" panel-manager></a-entity>
+      <a-entity id="panel-container" video-panel></a-entity>
 
       <!-- WebSocket connection panel -->
       <a-entity id="websocket-panel" websocket-panel></a-entity>
