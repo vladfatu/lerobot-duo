@@ -5,18 +5,17 @@
 AFRAME.registerComponent('websocket-panel', {
   schema: {
     width: { type: 'number', default: 0.5 },
-    height: { type: 'number', default: 0.3 },
+    height: { type: 'number', default: 0.4 },
     position: { type: 'vec3', default: { x: -1.5, y: 1.2, z: -1.5 } }
   },
 
   init: function() {
-    this.isHovered = false;
     this.isConnecting = false; // Prevent multiple simultaneous connection attempts
+    this.isResetting = false; // Prevent multiple reset triggers
     
     // Bind methods
-    this.onConnect = this.onConnect.bind(this);
-    this.onMouseEnter = this.onMouseEnter.bind(this);
-    this.onMouseLeave = this.onMouseLeave.bind(this);
+    this.onConnectButtonAction = this.onConnectButtonAction.bind(this);
+    this.onResetButtonAction = this.onResetButtonAction.bind(this);
     
     this.createPanel();
     
@@ -65,51 +64,45 @@ AFRAME.registerComponent('websocket-panel', {
     this.statusText.setAttribute('color', '#cccccc');
     this.panel.appendChild(this.statusText);
     
-    // Connect/Disconnect button
-    this.button = document.createElement('a-plane');
-    this.button.setAttribute('class', 'clickable');
-    this.button.setAttribute('width', width * 0.7);
-    this.button.setAttribute('height', height * 0.25);
-    this.button.setAttribute('position', `0 ${-height * 0.25} 0.015`);
-    this.button.setAttribute('color', '#4CAF50');
-    this.button.setAttribute('opacity', '0.9');
+    // Connect/Disconnect button using vr-button component
+    this.connectButton = document.createElement('a-entity');
+    this.connectButton.setAttribute('vr-button', {
+      width: width * 0.7,
+      height: height * 0.18,
+      color: '#4CAF50',
+      hoverColor: '#66BB6A',
+      pressedColor: '#2E7D32',
+      text: 'Connect',
+      textWidth: width * 1.5
+    });
+    this.connectButton.setAttribute('position', `0 ${-height * 0.15} 0.015`);
     
-    // Button text
-    this.buttonText = document.createElement('a-text');
-    this.buttonText.setAttribute('value', 'Connect');
-    this.buttonText.setAttribute('align', 'center');
-    this.buttonText.setAttribute('position', '0 0 0.005');
-    this.buttonText.setAttribute('width', width * 1.5);
-    this.buttonText.setAttribute('color', '#ffffff');
-    this.button.appendChild(this.buttonText);
+    // Listen for button action event
+    this.connectButton.addEventListener('button-action', this.onConnectButtonAction);
     
-    // Button interaction events - use raycaster events for VR
-    this.button.addEventListener('click', this.onConnect);
-    this.button.addEventListener('raycaster-intersected', this.onMouseEnter);
-    this.button.addEventListener('raycaster-intersected-cleared', this.onMouseLeave);
+    this.panel.appendChild(this.connectButton);
     
-    this.panel.appendChild(this.button);
+    // Reset button using vr-button component
+    this.resetButton = document.createElement('a-entity');
+    this.resetButton.setAttribute('vr-button', {
+      width: width * 0.7,
+      height: height * 0.18,
+      color: '#FF9800',
+      hoverColor: '#FFB74D',
+      pressedColor: '#E65100',
+      text: 'Reset',
+      textWidth: width * 1.5
+    });
+    this.resetButton.setAttribute('position', `0 ${-height * 0.38} 0.015`);
+    
+    // Listen for reset button action event
+    this.resetButton.addEventListener('button-action', this.onResetButtonAction);
+    
+    this.panel.appendChild(this.resetButton);
     this.el.appendChild(this.panel);
   },
 
-  onMouseEnter: function() {
-    this.isHovered = true;
-    this.button.setAttribute('opacity', '1.0');
-    this.button.setAttribute('scale', '1.05 1.05 1.05');
-  },
-
-  onMouseLeave: function() {
-    this.isHovered = false;
-    this.button.setAttribute('opacity', '0.9');
-    this.button.setAttribute('scale', '1 1 1');
-  },
-
-  onConnect: async function(event) {
-    // Prevent event bubbling and multiple triggers
-    if (event) {
-      event.stopPropagation();
-    }
-    
+  onConnectButtonAction: async function(event) {
     // Prevent multiple simultaneous connection attempts
     if (this.isConnecting) {
       return;
@@ -123,8 +116,11 @@ AFRAME.registerComponent('websocket-panel', {
     this.isConnecting = true;
     
     // Disable button during connection attempt
-    this.button.setAttribute('color', '#888888');
-    this.buttonText.setAttribute('value', '...');
+    const buttonComponent = this.connectButton.components['vr-button'];
+    if (buttonComponent) {
+      buttonComponent.setDisabled(true);
+      buttonComponent.setText('...');
+    }
     
     try {
       const connected = await window.webSocketManager.toggleConnection();
@@ -133,9 +129,51 @@ AFRAME.registerComponent('websocket-panel', {
       console.error('❌ Connection error:', error);
     } finally {
       this.isConnecting = false;
+      if (buttonComponent) {
+        buttonComponent.setDisabled(false);
+      }
     }
     
     // Update will happen in tick
+  },
+
+  onResetButtonAction: async function(event) {
+    // Prevent multiple reset triggers
+    if (this.isResetting) {
+      return;
+    }
+    
+    if (!window.webSocketManager) {
+      console.warn('⚠️ WebSocket manager not available');
+      return;
+    }
+    
+    if (!window.webSocketManager.isConnected) {
+      console.warn('⚠️ WebSocket not connected');
+      return;
+    }
+    
+    this.isResetting = true;
+    
+    // Disable button during reset
+    const buttonComponent = this.resetButton.components['vr-button'];
+    if (buttonComponent) {
+      buttonComponent.setDisabled(true);
+      buttonComponent.setText('...');
+    }
+    
+    try {
+      await window.webSocketManager.triggerReset(2000);
+      console.log('🔄 Reset complete');
+    } catch (error) {
+      console.error('❌ Reset error:', error);
+    } finally {
+      this.isResetting = false;
+      if (buttonComponent) {
+        buttonComponent.setDisabled(false);
+        buttonComponent.setText('Reset');
+      }
+    }
   },
 
   tick: function() {
@@ -149,22 +187,28 @@ AFRAME.registerComponent('websocket-panel', {
     // Update status text
     this.statusText.setAttribute('value', isConnected ? 'Connected' : 'Disconnected');
     
-    // Update button
-    if (!this.isHovered) {
+    // Update connect button via vr-button component
+    const buttonComponent = this.connectButton.components['vr-button'];
+    if (buttonComponent && !this.isConnecting) {
       if (isConnected) {
-        this.button.setAttribute('color', '#f44336'); // Red for disconnect
-        this.buttonText.setAttribute('value', 'Disconnect');
+        buttonComponent.setColor('#f44336'); // Red for disconnect
+        buttonComponent.setText('Disconnect');
       } else {
-        this.button.setAttribute('color', '#4CAF50'); // Green for connect
-        this.buttonText.setAttribute('value', 'Connect');
+        buttonComponent.setColor('#4CAF50'); // Green for connect
+        buttonComponent.setText('Connect');
       }
+    }
+    
+    // Update reset button - disable when not connected
+    const resetButtonComponent = this.resetButton.components['vr-button'];
+    if (resetButtonComponent && !this.isResetting) {
+      resetButtonComponent.setDisabled(!isConnected);
     }
   },
 
   remove: function() {
-    this.button.removeEventListener('click', this.onConnect);
-    this.button.removeEventListener('raycaster-intersected', this.onMouseEnter);
-    this.button.removeEventListener('raycaster-intersected-cleared', this.onMouseLeave);
+    this.connectButton.removeEventListener('button-action', this.onConnectButtonAction);
+    this.resetButton.removeEventListener('button-action', this.onResetButtonAction);
     
     if (this.panel && this.panel.parentNode) {
       this.panel.parentNode.removeChild(this.panel);

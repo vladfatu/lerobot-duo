@@ -202,7 +202,7 @@ while True:
     # busy_wait(max(1.0 / FPS - (time.perf_counter() - t0), 0.0))
 
     ## TODO remove - for testing only
-    teleoperation_fps = 20
+    teleoperation_fps = 30
     busy_wait(max(1.0 / teleoperation_fps - (time.perf_counter() - t0), 0.0))
 
 

@@ -14,6 +14,7 @@ class WebSocketManager {
     this.serverUrl = `${wsProtocol}//${origin.hostname}:8080`;
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 3;
+    this.resetActive = false; // Flag to send reset=true with controller updates
     
     // Store controller data
     this.controllerData = {
@@ -142,6 +143,7 @@ class WebSocketManager {
 
     // FramePacket structure: { left: PosePacket, right: PosePacket }
     const payload = {
+      reset: this.resetActive,
       left: this.controllerData.left,
       right: this.controllerData.right
     };
@@ -151,6 +153,24 @@ class WebSocketManager {
     } catch (error) {
       console.error('❌ Failed to send controller data:', error);
     }
+  }
+
+  /**
+   * Trigger reset mode for a specified duration
+   * @param {number} durationMs - Duration in milliseconds to keep reset active
+   * @returns {Promise<void>} - Resolves when reset period is complete
+   */
+  triggerReset(durationMs = 500) {
+    return new Promise((resolve) => {
+      this.resetActive = true;
+      console.log('🔄 Reset triggered');
+      
+      setTimeout(() => {
+        this.resetActive = false;
+        console.log('🔄 Reset complete');
+        resolve();
+      }, durationMs);
+    });
   }
 }
 
