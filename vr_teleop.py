@@ -34,8 +34,8 @@ FPS = 30
 
 # Initialize the robot and teleoperator
 duo_camera_config = {
-    "left_wrist": OpenCVCameraConfig(index_or_path=1, width=640, height=480, fps=FPS),
-    "right_wrist": OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=FPS),
+    "left_wrist": OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=FPS),
+    "right_wrist": OpenCVCameraConfig(index_or_path=1, width=640, height=480, fps=FPS),
     "main": OpenCVCameraConfig(index_or_path=2, width=640, height=480, fps=FPS)
 }
 duo_robot_config = BiSO100FollowerConfig(
