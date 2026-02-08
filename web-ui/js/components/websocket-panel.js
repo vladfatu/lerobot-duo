@@ -5,7 +5,7 @@
 AFRAME.registerComponent('websocket-panel', {
   schema: {
     width: { type: 'number', default: 0.5 },
-    height: { type: 'number', default: 0.4 },
+    height: { type: 'number', default: 0.5 },
     position: { type: 'vec3', default: { x: -1.5, y: 1.2, z: -1.5 } }
   },
 
@@ -16,6 +16,7 @@ AFRAME.registerComponent('websocket-panel', {
     // Bind methods
     this.onConnectButtonAction = this.onConnectButtonAction.bind(this);
     this.onResetButtonAction = this.onResetButtonAction.bind(this);
+    this.onPassthroughButtonAction = this.onPassthroughButtonAction.bind(this);
     
     this.createPanel();
     
@@ -51,7 +52,7 @@ AFRAME.registerComponent('websocket-panel', {
     // Status indicator (circle)
     this.statusIndicator = document.createElement('a-circle');
     this.statusIndicator.setAttribute('radius', '0.02');
-    this.statusIndicator.setAttribute('position', `${-width * 0.3} ${height * 0.05} 0.015`);
+    this.statusIndicator.setAttribute('position', `${-width * 0.3} ${height * 0.18} 0.015`);
     this.statusIndicator.setAttribute('color', '#ff4444'); // Red = disconnected
     this.panel.appendChild(this.statusIndicator);
     
@@ -59,7 +60,7 @@ AFRAME.registerComponent('websocket-panel', {
     this.statusText = document.createElement('a-text');
     this.statusText.setAttribute('value', 'Disconnected');
     this.statusText.setAttribute('align', 'left');
-    this.statusText.setAttribute('position', `${-width * 0.2} ${height * 0.05} 0.015`);
+    this.statusText.setAttribute('position', `${-width * 0.2} ${height * 0.18} 0.015`);
     this.statusText.setAttribute('width', width * 1.2);
     this.statusText.setAttribute('color', '#cccccc');
     this.panel.appendChild(this.statusText);
@@ -68,14 +69,14 @@ AFRAME.registerComponent('websocket-panel', {
     this.connectButton = document.createElement('a-entity');
     this.connectButton.setAttribute('vr-button', {
       width: width * 0.7,
-      height: height * 0.18,
+      height: height * 0.14,
       color: '#4CAF50',
       hoverColor: '#66BB6A',
       pressedColor: '#2E7D32',
       text: 'Connect',
       textWidth: width * 1.5
     });
-    this.connectButton.setAttribute('position', `0 ${-height * 0.15} 0.015`);
+    this.connectButton.setAttribute('position', `0 ${height * 0.02} 0.015`);
     
     // Listen for button action event
     this.connectButton.addEventListener('button-action', this.onConnectButtonAction);
@@ -86,19 +87,37 @@ AFRAME.registerComponent('websocket-panel', {
     this.resetButton = document.createElement('a-entity');
     this.resetButton.setAttribute('vr-button', {
       width: width * 0.7,
-      height: height * 0.18,
+      height: height * 0.14,
       color: '#FF9800',
       hoverColor: '#FFB74D',
       pressedColor: '#E65100',
       text: 'Reset',
       textWidth: width * 1.5
     });
-    this.resetButton.setAttribute('position', `0 ${-height * 0.38} 0.015`);
+    this.resetButton.setAttribute('position', `0 ${-height * 0.16} 0.015`);
     
     // Listen for reset button action event
     this.resetButton.addEventListener('button-action', this.onResetButtonAction);
     
     this.panel.appendChild(this.resetButton);
+    
+    // Passthrough toggle button using vr-button component
+    this.passthroughButton = document.createElement('a-entity');
+    this.passthroughButton.setAttribute('vr-button', {
+      width: width * 0.7,
+      height: height * 0.14,
+      color: '#607D8B',
+      hoverColor: '#78909C',
+      pressedColor: '#455A64',
+      text: 'Passthrough: OFF',
+      textWidth: width * 1.5
+    });
+    this.passthroughButton.setAttribute('position', `0 ${-height * 0.34} 0.015`);
+    
+    // Listen for passthrough button action event
+    this.passthroughButton.addEventListener('button-action', this.onPassthroughButtonAction);
+    
+    this.panel.appendChild(this.passthroughButton);
     this.el.appendChild(this.panel);
   },
 
@@ -176,6 +195,23 @@ AFRAME.registerComponent('websocket-panel', {
     }
   },
 
+  onPassthroughButtonAction: function(event) {
+    if (!window.passthroughManager) {
+      console.warn('⚠️ Passthrough manager not available');
+      return;
+    }
+    
+    const enabled = window.passthroughManager.togglePassthrough();
+    console.log(`👁️ Passthrough ${enabled ? 'enabled' : 'disabled'}`);
+    
+    // Update button text
+    const buttonComponent = this.passthroughButton.components['vr-button'];
+    if (buttonComponent) {
+      buttonComponent.setText(`Passthrough: ${enabled ? 'ON' : 'OFF'}`);
+      buttonComponent.setColor(enabled ? '#2196F3' : '#607D8B');
+    }
+  },
+
   tick: function() {
     if (!window.webSocketManager) return;
     
@@ -209,6 +245,7 @@ AFRAME.registerComponent('websocket-panel', {
   remove: function() {
     this.connectButton.removeEventListener('button-action', this.onConnectButtonAction);
     this.resetButton.removeEventListener('button-action', this.onResetButtonAction);
+    this.passthroughButton.removeEventListener('button-action', this.onPassthroughButtonAction);
     
     if (this.panel && this.panel.parentNode) {
       this.panel.parentNode.removeChild(this.panel);

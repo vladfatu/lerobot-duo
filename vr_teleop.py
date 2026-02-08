@@ -112,17 +112,8 @@ vr_to_left_arm_joints_processor = get_vr_to_arm_processor(list(duo_robot.left_ar
 vr_to_right_arm_joints_processor = get_vr_to_arm_processor(list(duo_robot.right_arm.bus.motors.keys()))
 
 # Connect to the robot and teleoperator
-# left_arm.connect()
-# right_arm.connect()
-
 duo_robot.connect()
 teleop_device.connect()
-
-# TODO remove - test camera frames
-right_wrist_frame = duo_robot.cameras["right_wrist"].async_read(timeout_ms=200)
-cv2.imwrite("right_wrist_frame.jpg", right_wrist_frame)
-left_wrist_frame = duo_robot.cameras["left_wrist"].async_read(timeout_ms=200)
-cv2.imwrite("left_wrist_frame.jpg", left_wrist_frame)
 
 # Init rerun viewer
 init_rerun(session_name="vr_lerobot_duo_teleop")

@@ -21,9 +21,13 @@
     <script src="js/components/controller-axes.js"></script>
     <script src="js/components/vr-button.js"></script>
     <script src="js/components/websocket-panel.js"></script>
+    <script src="js/components/passthrough-manager.js"></script>
   </head>
   <body>
-    <a-scene>
+    <a-scene 
+      passthrough-manager
+      xr-mode-ui="XRMode: ar"
+      background="transparent: true">
       <a-assets></a-assets>
       
       <!-- Environment -->

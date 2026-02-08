@@ -2,6 +2,7 @@
  * VR Button Component
  * A reusable button that shades on trigger press and fires action on trigger release
  */
+
 AFRAME.registerComponent('vr-button', {
   schema: {
     width: { type: 'number', default: 0.15 },
@@ -21,11 +22,9 @@ AFRAME.registerComponent('vr-button', {
     this.baseColor = this.data.color;
     
     // Bind methods
-    this.onTriggerDown = this.onTriggerDown.bind(this);
-    this.onTriggerUp = this.onTriggerUp.bind(this);
+    this.onTriggerChanged = this.onTriggerChanged.bind(this);
     this.onMouseEnter = this.onMouseEnter.bind(this);
     this.onMouseLeave = this.onMouseLeave.bind(this);
-    this.onClick = this.onClick.bind(this);
     
     this.createButton();
     this.addEventListeners();
@@ -58,28 +57,23 @@ AFRAME.registerComponent('vr-button', {
   },
 
   addEventListeners: function() {
-    // VR controller trigger events
-    this.el.addEventListener('triggerdown', this.onTriggerDown);
-    this.el.addEventListener('triggerup', this.onTriggerUp);
-    
     // Raycaster hover events
     this.el.addEventListener('raycaster-intersected', this.onMouseEnter);
     this.el.addEventListener('raycaster-intersected-cleared', this.onMouseLeave);
     
-    // Mouse click fallback for non-VR
-    this.el.addEventListener('click', this.onClick);
   },
 
   onMouseEnter: function(event) {
     if (this.data.disabled) return;
+
+    console.log('Hover start on button:', this.data.text);
     
     this.isHovered = true;
     this.hoveringRaycaster = event.detail.el;
     
-    // Listen for trigger events on the controller
+    // Listen for trigger value changes on the controller
     if (this.hoveringRaycaster) {
-      this.hoveringRaycaster.addEventListener('triggerdown', this.onTriggerDown);
-      this.hoveringRaycaster.addEventListener('triggerup', this.onTriggerUp);
+      this.hoveringRaycaster.addEventListener('triggerchanged', this.onTriggerChanged);
     }
     
     if (!this.isPressed) {
@@ -89,12 +83,12 @@ AFRAME.registerComponent('vr-button', {
   },
 
   onMouseLeave: function(event) {
+    if (this.data.disabled) return;
     this.isHovered = false;
     
-    // Remove trigger listeners from the controller
+    // Remove trigger listener from the controller
     if (this.hoveringRaycaster) {
-      this.hoveringRaycaster.removeEventListener('triggerdown', this.onTriggerDown);
-      this.hoveringRaycaster.removeEventListener('triggerup', this.onTriggerUp);
+      this.hoveringRaycaster.removeEventListener('triggerchanged', this.onTriggerChanged);
       this.hoveringRaycaster = null;
     }
     
@@ -107,46 +101,30 @@ AFRAME.registerComponent('vr-button', {
     this.el.setAttribute('scale', '1 1 1');
   },
 
-  onTriggerDown: function(event) {
+  onTriggerChanged: function(event) {
     if (this.data.disabled || !this.isHovered) return;
     
-    event.stopPropagation();
-    this.isPressed = true;
+    const triggerValue = event.detail.value;
     
-    // Visual feedback - darken the button
-    this.el.setAttribute('material', 'color', this.data.pressedColor);
-    this.el.setAttribute('scale', '0.95 0.95 0.95');
-  },
-
-  onTriggerUp: function(event) {
-    if (this.data.disabled) return;
-    
-    // Only fire action if we're still hovered and were pressed
-    if (this.isPressed && this.isHovered) {
-      event.stopPropagation();
+    // Trigger pressed past 50% - button is pressed
+    if (triggerValue > 0.5 && !this.isPressed) {
+      this.isPressed = true;
+      
+      // Visual feedback - darken the button
+      this.el.setAttribute('material', 'color', this.data.pressedColor);
+      this.el.setAttribute('scale', '0.95 0.95 0.95');
+    }
+    // Trigger fully released (0%) while button was pressed - fire action
+    else if (triggerValue === 0 && this.isPressed) {
+      this.isPressed = false;
       
       // Fire the action event
       this.el.emit('button-action', { button: this.el }, false);
-    }
-    
-    this.isPressed = false;
-    
-    // Return to hover state if still hovered
-    if (this.isHovered) {
+      
+      // Return to hover state
       this.el.setAttribute('material', 'color', this.data.hoverColor);
       this.el.setAttribute('scale', '1.05 1.05 1.05');
-    } else {
-      this.el.setAttribute('material', 'color', this.baseColor);
-      this.el.setAttribute('scale', '1 1 1');
     }
-  },
-
-  onClick: function(event) {
-    // Mouse click fallback for non-VR usage
-    if (this.data.disabled) return;
-    
-    event.stopPropagation();
-    this.el.emit('button-action', { button: this.el }, false);
   },
 
   update: function(oldData) {
@@ -190,15 +168,11 @@ AFRAME.registerComponent('vr-button', {
 
   remove: function() {
     // Clean up event listeners
-    this.el.removeEventListener('triggerdown', this.onTriggerDown);
-    this.el.removeEventListener('triggerup', this.onTriggerUp);
     this.el.removeEventListener('raycaster-intersected', this.onMouseEnter);
     this.el.removeEventListener('raycaster-intersected-cleared', this.onMouseLeave);
-    this.el.removeEventListener('click', this.onClick);
     
     if (this.hoveringRaycaster) {
-      this.hoveringRaycaster.removeEventListener('triggerdown', this.onTriggerDown);
-      this.hoveringRaycaster.removeEventListener('triggerup', this.onTriggerUp);
+      this.hoveringRaycaster.removeEventListener('triggerchanged', this.onTriggerChanged);
     }
     
     if (this.buttonText && this.buttonText.parentNode) {
