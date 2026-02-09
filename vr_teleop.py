@@ -93,7 +93,7 @@ def get_vr_to_arm_processor(motor_names: list[str]) -> RobotProcessorPipeline[tu
                 use_latched_reference=True,
             ),
             EEBoundsAndSafety(
-                end_effector_bounds={"min": [-1.0, -1.0, -1.0], "max": [1.0, 1.0, 1.0]},
+                end_effector_bounds={"min": [-1.0, -1.0, -1.0], "max": [2.0, 2.0, 2.0]},
                 max_ee_step_m=0.20,
             ),
             GripperVelocityToJoint(
@@ -108,8 +108,12 @@ def get_vr_to_arm_processor(motor_names: list[str]) -> RobotProcessorPipeline[tu
         to_transition=robot_action_observation_to_transition,
         to_output=transition_to_robot_action,
     )
-vr_to_left_arm_joints_processor = get_vr_to_arm_processor(list(duo_robot.left_arm.bus.motors.keys()))
-vr_to_right_arm_joints_processor = get_vr_to_arm_processor(list(duo_robot.right_arm.bus.motors.keys()))
+
+processors = {
+    "left_arm": get_vr_to_arm_processor(list(duo_robot.left_arm.bus.motors.keys())),
+    "right_arm": get_vr_to_arm_processor(list(duo_robot.right_arm.bus.motors.keys())),
+    "has_initial_position": True
+}
 
 # Connect to the robot and teleoperator
 duo_robot.connect()
@@ -120,6 +124,18 @@ init_rerun(session_name="vr_lerobot_duo_teleop")
 
 if not duo_robot.is_connected or not teleop_device.is_connected:
     raise ValueError("Robot or teleop is not connected!")
+
+initial_right_arm_obs = duo_robot.right_arm.get_observation()
+initial_left_arm_obs = duo_robot.left_arm.get_observation()
+
+def reset_robot_to_initial_position(processors):
+    print("Resetting robot to initial position...")
+    _ = duo_robot.right_arm.send_action(initial_right_arm_obs)
+    _ = duo_robot.left_arm.send_action(initial_left_arm_obs)
+
+    processors["left_arm"] = get_vr_to_arm_processor(list(duo_robot.left_arm.bus.motors.keys()))
+    processors["right_arm"] = get_vr_to_arm_processor(list(duo_robot.right_arm.bus.motors.keys()))
+    processors["has_initial_position"] = True
 
 
 print("Starting teleop loop. Move your phone to teleoperate the robot...")
@@ -156,6 +172,8 @@ while True:
         # print("No VR observation received yet.")
         # log_rerun_data(observation=left_arm_obs, action=None)
         log_rerun_data(observation=duo_robot.get_observation(), action=None)
+    elif vr_obs['reset'] and not processors["has_initial_position"]:
+        reset_robot_to_initial_position(processors)
     else:
         print("VR Observation: ", vr_obs)
 
@@ -163,11 +181,12 @@ while True:
         # print(f"VR Observation: {right_controller_obs}")
 
         if right_controller_obs["enabled"]:
+            processors["has_initial_position"] = False
             print(f"Right Arm VR Position: {right_controller_obs['pos']}")
         else:
             print("Right controller not enabled.")
 
-        right_joint_action = vr_to_right_arm_joints_processor((right_controller_obs, right_arm_obs))
+        right_joint_action = processors["right_arm"]((right_controller_obs, right_arm_obs))
         _ = duo_robot.right_arm.send_action(right_joint_action)
 
 
@@ -175,11 +194,12 @@ while True:
         # print(f"VR Observation: {left_controller_obs}")
 
         if left_controller_obs["enabled"]:
+            processors["has_initial_position"] = False
             print(f"Left Arm VR Position: {left_controller_obs['pos']}")
         else:
             print("Left controller not enabled.")
 
-        left_joint_action = vr_to_left_arm_joints_processor((left_controller_obs, left_arm_obs))
+        left_joint_action = processors["left_arm"]((left_controller_obs, left_arm_obs))
         _ = duo_robot.left_arm.send_action(left_joint_action)
 
         # # Add prefixes back
