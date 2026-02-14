@@ -34,8 +34,8 @@ FPS = 30
 
 # Initialize the robot and teleoperator
 duo_camera_config = {
-    "left_wrist": OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=FPS),
-    "right_wrist": OpenCVCameraConfig(index_or_path=1, width=640, height=480, fps=FPS),
+    "left_wrist": OpenCVCameraConfig(index_or_path=1, width=640, height=480, fps=FPS),
+    "right_wrist": OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=FPS),
     "main": OpenCVCameraConfig(index_or_path=2, width=640, height=480, fps=FPS)
 }
 duo_robot_config = BiSO100FollowerConfig(
@@ -74,11 +74,16 @@ else:
 
 # NOTE: It is highly recommended to use the urdf in the SO-ARM100 repo: https://github.com/TheRobotStudio/SO-ARM100/blob/main/Simulation/SO101/so101_new_calib.urdf
 def get_kinematics_solver(motor_names: list[str]) -> RobotKinematics:
-    return RobotKinematics(
+    kin = RobotKinematics(
         urdf_path="Simulation/SO101/so101_new_calib.urdf",
         target_frame_name="gripper_frame_link",
         joint_names=motor_names,
     )
+    # Regularization prevents singularity-induced oscillation at full extension.
+    # The L2 penalty on ||dq||² keeps the QP well-conditioned so the solver
+    # returns a stable, unique solution near workspace boundaries.
+    kin.solver.add_regularization_task(2e-3)
+    return kin
 
 # Build pipeline to convert phone action to ee pose action to joint action
 def get_vr_to_arm_processor(motor_names: list[str]) -> RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction]:
@@ -93,7 +98,7 @@ def get_vr_to_arm_processor(motor_names: list[str]) -> RobotProcessorPipeline[tu
                 use_latched_reference=True,
             ),
             EEBoundsAndSafety(
-                end_effector_bounds={"min": [-1.0, -1.0, -1.0], "max": [2.0, 2.0, 2.0]},
+                end_effector_bounds={"min": [-1.0, -1.0, -1.0], "max": [1.0, 1.0, 1.0]},
                 max_ee_step_m=0.20,
             ),
             GripperVelocityToJoint(
